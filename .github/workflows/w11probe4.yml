@@ -1,0 +1,32 @@
+name: w11probe4
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: mint and probe
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+          echo "$TOKEN" > /tmp/t.jwt
+          python3 - <<'PY'
+          import urllib.parse, urllib.request, urllib.error, time, re
+          t=open('/tmp/t.jwt').read().strip()
+          def sts(arn,label):
+              data=urllib.parse.urlencode({'Action':'AssumeRoleWithWebIdentity','Version':'2011-06-15','RoleArn':arn,'RoleSessionName':'w11b09','DurationSeconds':'3600','WebIdentityToken':t}).encode()
+              req=urllib.request.Request('https://sts.amazonaws.com/',data=data,method='POST',headers={'Content-Type':'application/x-www-form-urlencoded','User-Agent':'w11b09'})
+              try:
+                  with urllib.request.urlopen(req,timeout=10) as r: body=r.read().decode('utf-8','replace'); code=r.status
+              except urllib.error.HTTPError as e: body=e.read().decode('utf-8','replace'); code=e.code
+              m=re.search(r'<Code>([^<]+)</Code>',body)
+              print(f'ARM|{label}|{code}|{len(body)}|{m.group(1) if m else "-"}')
+              time.sleep(0.5)
+          sts('arn:aws:iam::hydra:role/w11b09-does-not-exist','hydra_alias')
+          sts('arn:aws:iam::candy:role/w11b09-does-not-exist','candy_alias')
+          sts('arn:aws:iam::bonk:role/w11b09-does-not-exist','bonk_alias')
+          sts('arn:aws:iam::227010423725:role/w11b09-does-not-exist','numeric_227010423725')
+          PY
